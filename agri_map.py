@@ -156,6 +156,7 @@ class CocoaFarm:
                               (secondary_adjusted // secondary_spacing)) / 2
         # set up spacing and offset variables for both directions
         cocoa_r = cocoa.d_canopy / 2
+        major_offset = cocoa_r
         half_step = (cocoa_r + primary_spacing / 2,
                      cocoa_r + secondary_spacing / 2)
         half_max = (dims[0] - cocoa_r, dims[1] - cocoa_r)
@@ -163,9 +164,9 @@ class CocoaFarm:
         # create the main and secondary grids
         cocoa_r /= 1.0001 # handle float inaccuracy
 
-        X0,Y0 = np.meshgrid(np.arange(cocoa_r, dims[0] - cocoa_r,
+        X0,Y0 = np.meshgrid(np.arange(major_offset, dims[0] - cocoa_r,
                                       primary_spacing),
-                            np.arange(cocoa_r, dims[1] - cocoa_r,
+                            np.arange(major_offset, dims[1] - cocoa_r,
                                       secondary_spacing))
         X1,Y1 = np.meshgrid(np.arange(half_step[0], half_max[0],
                                       primary_spacing),

@@ -136,52 +136,46 @@ class CocoaFarm:
         pbar.close()
 
     def optimise_cocoa_spacings(self):
-        dims = self.dims # TODO simplify with width <= height
+        # Optimal cocoa spacing comes from flat gaps along the shorter axis
+        #  and staggered gaps along the longer one.
+        # Ensure first index is the smallest.
+        dims = min(self.dims), max(self.dims)
         cocoa = self.cocoa
         # adjust dimensions to ensure cocoa canopies stay inside the plot
         adjusted_dims = [side - cocoa.d_canopy for side in dims]
-        # optimal cocoa spacing comes from flat gaps along the shorter axis
-        #  and staggered gaps along the longer one.
-        # 1/True if width has more room, else 0/False
-        expand_ind = dims[0] >= dims[1]
-        fill_ind   = not expand_ind
         # use expansion index to determine even spacing of the main grid
-        primary_adjusted = adjusted_dims[expand_ind]
+        primary_adjusted = adjusted_dims[0]
         primary_spacing  = (primary_adjusted /
-                           (primary_adjusted // cocoa.min_dist))
+                            (primary_adjusted // cocoa.min_dist))
         # calculate the offset and spacing for the indented grid
         secondary_spacing  = 2 * np.sqrt(cocoa.min_dist**2 -
-                                        (primary_spacing / 2)**2)
-        secondary_dist     = dims[fill_ind]
-        secondary_adjusted = adjusted_dims[fill_ind]
+                                         (primary_spacing / 2)**2)
+        secondary_dist     = dims[1]
+        secondary_adjusted = adjusted_dims[1]
         secondary_offset   = (secondary_dist - secondary_spacing *
-                            (secondary_adjusted // secondary_spacing)) / 2
+                              (secondary_adjusted // secondary_spacing)) / 2
         # set up spacing and offset variables for both directions
-        spacing = (secondary_spacing, primary_spacing)
         cocoa_r = cocoa.d_canopy / 2
-        offsets = [cocoa_r] * 2
-        half_step = (offsets[fill_ind] + spacing[fill_ind] / 2,
-                     offsets[expand_ind] + spacing[expand_ind] / 2)
-        half_max = (dims[fill_ind] - cocoa_r, dims[expand_ind] - cocoa_r)
+        half_step = (cocoa_r + primary_spacing / 2,
+                     cocoa_r + secondary_spacing / 2)
+        half_max = (dims[0] - cocoa_r, dims[1] - cocoa_r)
 
         # create the main and secondary grids
         cocoa_r /= 1.0001 # handle float inaccuracy
 
-        X0,Y0 = np.meshgrid(np.arange(offsets[fill_ind], dims[0] - cocoa_r,
-                                        spacing[fill_ind]),
-                            np.arange(offsets[expand_ind], dims[1] - cocoa_r,
-                                        spacing[expand_ind]))
-        X1,Y1 = np.meshgrid(np.arange(half_step[0], half_max[fill_ind],
-                                        spacing[fill_ind]),
-                            np.arange(half_step[1], half_max[expand_ind],
-                                        spacing[expand_ind]))
+        X0,Y0 = np.meshgrid(np.arange(cocoa_r, dims[0] - cocoa_r,
+                                      primary_spacing),
+                            np.arange(cocoa_r, dims[1] - cocoa_r,
+                                      secondary_spacing))
+        X1,Y1 = np.meshgrid(np.arange(half_step[0], half_max[0],
+                                      primary_spacing),
+                            np.arange(half_step[1], half_max[1],
+                                      secondary_spacing))
 
         # save the relevant results internally for later use
         self.primary, self.secondary = primary_spacing, secondary_spacing
-        self.CX0 = X0
-        self.CX1 = X1
-        self.CY0 = Y0
-        self.CY1 = Y1
+        self.CX0, self.CX1 = X0, X1
+        self.CY0, self.CY1 = Y0, Y1
         self.CX = np.hstack((self.CX0.reshape(-1), self.CX1.reshape(-1)))
         self.CY = np.hstack((self.CY0.reshape(-1), self.CY1.reshape(-1)))
 

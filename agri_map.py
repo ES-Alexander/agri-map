@@ -494,6 +494,7 @@ if __name__ == '__main__':
     from argparse import ArgumentParser
 
     def get_defaults(cls, method='__init__'):
+        ''' Automatically extract the default values of a method. '''
         signature = inspect.signature(getattr(cls, method))
         return {k: v.default
                 for k, v in signature.parameters.items()

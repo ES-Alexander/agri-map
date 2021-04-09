@@ -502,7 +502,8 @@ if __name__ == '__main__':
     farm = get_defaults(CocoaFarm)
 
     parser = ArgumentParser(description=description)
-    parser.add_argument('-d', '--dims', type=float, nargs=2, default=(100,100),
+    parser.add_argument('-d', '--dims', type=float, nargs=2,
+                        default=farm['dims'],
                         help='dimensions (width <= height) of the plot [m]')
     parser.add_argument('-n', '--no_shade', action='store_true',
                         help='flag to turn off viewing factored shade regions')

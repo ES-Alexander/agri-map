@@ -2,9 +2,9 @@
 
 from dataclasses import dataclass
 from typing import Tuple
-import plotly.graph_objects as go
+import plotly.graph_objects as go # plotting
+from tqdm import tqdm # progress bar
 import numpy as np
-import math
 
 @dataclass
 class Tree:
@@ -95,6 +95,18 @@ class CocoaFarm:
         cocoa trunks are shaded (for during initial growth).
     'perm_shade' is a ShadeTree to minimally pack into the plot such that all
         cocoa canopies are shaded (for long term production).
+    'view_shade' is a boolean indicating whether to display factored shade
+        regions in the visualisation.
+    'min_coverage' is the minimum allowed permanent shade coverage of any
+        single cocoa tree.
+    'avg_coverage' is the minimum allowed average permanent shade coverage of
+        all the cocoao trees.
+    'iterations' is the number of runs for perm-tree reduction - used to
+        ensure that the result is relatively optimal (low number of perm shade
+        trees).
+    'samples' is the number of points to sample in each cocoa tree, when
+        estimating coverage percentage. More samples is more accurate but
+        uses more memory and takes longer.
 
     '''
     dims: tuple = (100, 100)
@@ -102,18 +114,29 @@ class CocoaFarm:
     temp_shade: ShadeTree = TempShade()
     perm_shade: ShadeTree = PermShade()
     view_shade: bool = True
+    min_coverage: float = 0.3
+    avg_coverage: float = 0.5
+    iterations: int = 5
+    samples: int = 20
+    extra: bool = False
+    debug: bool = False
 
     def calculate_and_display(self, verbose=True):
         self.optimise_spacings()
         self.display_results(verbose)
 
     def optimise_spacings(self):
-        self.optimise_cocoa_spacings()
-        self.optimise_temp_spacings()
-        self.optimise_perm_spacings()
+        pbar = tqdm(total=3)
+        for name, func in (('cocoa', self.optimise_cocoa_spacings),
+                           ('temp shade', self.optimise_temp_spacings),
+                           ('perm shade', self.optimise_perm_spacings)):
+            pbar.set_description(f'Optimising {name} tree spacings')
+            func()
+            pbar.update()
+        pbar.close()
 
     def optimise_cocoa_spacings(self):
-        dims = self.dims
+        dims = self.dims # TODO simplify with width <= height
         cocoa = self.cocoa
         # adjust dimensions to ensure cocoa canopies stay inside the plot
         adjusted_dims = [side - cocoa.d_canopy for side in dims]
@@ -127,7 +150,7 @@ class CocoaFarm:
         primary_spacing  = (primary_adjusted /
                            (primary_adjusted // cocoa.min_dist))
         # calculate the offset and spacing for the indented grid
-        secondary_spacing  = 2 * math.sqrt(cocoa.min_dist**2 -
+        secondary_spacing  = 2 * np.sqrt(cocoa.min_dist**2 -
                                         (primary_spacing / 2)**2)
         secondary_dist     = dims[fill_ind]
         secondary_adjusted = adjusted_dims[fill_ind]
@@ -163,14 +186,21 @@ class CocoaFarm:
         self.CY = np.hstack((self.CY0.reshape(-1), self.CY1.reshape(-1)))
 
     def optimise_temp_spacings(self):
+        '''
+
+        NOTE: assumes x is the narrower axis, so vertical (y) is secondary.
+
+        '''
+        # !!TODO!! check and make sure this still works for primary on y-axis
         temp = self.temp_shade
         cocoa = self.cocoa
         d_shade = temp.d_canopy * temp.shade_factor
+        h_offset = self.primary / 2
         if d_shade < cocoa.min_dist + cocoa.d_trunk:
             # requires one temp shade tree per cocoa tree
             #  put as close as possible, at 45 degrees, to try to ensure
             #  all temp shade trees end up in the grid.
-            offset = (temp.min_dist + cocoa.d_trunk/2) / math.sqrt(2)
+            offset = (temp.min_dist + cocoa.d_trunk/2) / np.sqrt(2)
             self.TX = self.CX.reshape(-1) + offset
             self.TY = self.CY.reshape(-1) + offset
         elif d_shade < self.primary + cocoa.d_trunk:
@@ -187,10 +217,11 @@ class CocoaFarm:
             # , and possibly top
             """
         else:
+            h_offset = self.primary / 2
+            # calculate circumcircle diameter (around triangle of trunks)
             base = self.primary + cocoa.d_trunk
             height = (self.secondary + cocoa.d_trunk) / 2
             d_circum = (height**2 + (base**2) / 4) / height
-            h_offset = self.primary / 2
             if d_shade < d_circum:
                 # each temp tree can cover max two trees on the horizontal
                 # so get every second tree position horizontally
@@ -207,7 +238,8 @@ class CocoaFarm:
             elif d_shade < self.secondary + cocoa.d_trunk:
                 # each temp tree can cover three trees in a triangle
                 # determine circumcircle center vertical offset
-                v = math.sqrt(d_circum**2 - (self.primary + cocoa.d_trunk)**2) / 2
+                v = np.sqrt(d_circum**2
+                            - (self.primary + cocoa.d_trunk)**2) / 2
                 # get every third tree position horizontally
                 TX0 = self.CX0[:,::3].reshape(-1)
                 TY0 = self.CY0[:,::3].reshape(-1) + v
@@ -228,17 +260,160 @@ class CocoaFarm:
                 # TODO handle missing coverage and ones outside boundary
 
     def optimise_perm_spacings(self):
-        ... # TODO
+        # generate possible perm-shade tree positions
+        perm_poss = self._perm_poss()
+
+        # generate 'samples' sample points for one cocoa tree
+        samples = self.circ_sample()
+        N = len(samples)
+
+        # -> sample points for all cocoa trees (add offsets)
+        samples = (samples.reshape(1,-1)
+                   .repeat(self.CX.size, axis=0)
+                   .reshape(-1,2)
+                   + np.array([self.CX, self.CY]).T
+                   .repeat(len(samples), axis=0))
+        self.sample_result = samples
+
+        # calculate boolean coverage dataframe with multi-index of cocoa-tree,
+        #  point_index vs covered-by-perm-tree-location
+        d2 = (self.perm_shade.d_canopy / 2 * self.perm_shade.shade_factor) ** 2
+        coverage = np.empty((len(samples), len(perm_poss)), dtype=bool)
+        for index, p in enumerate(perm_poss): # TODO vectorise
+            coverage[:, index] = ((samples - p)**2).sum(axis=1) <= d2
+
+        # try to remove each tree, but add it back in if removing it means a
+        #  tree loses its required coverage, or the average coverage becomes
+        #  too low
+        backup = coverage.copy()
+        rng = np.random.default_rng()
+        min_count = len(perm_poss)
+        best = None
+
+        def indices_options():
+            ''' Create a generator of removal orderings.
+
+            Tries some logical orderings to start with (point creation order,
+            outside first to the middle, middle first to the outside), then
+            randomly shuffles the indices for any remaining iterations.
+
+            '''
+            indices = creation_order = np.arange(len(perm_poss))
+            # intelligent options
+            yield 'creation', creation_order
+            yield ('out first',
+                   (out_to_center := np.argsort(((perm_poss-perm_poss
+                                                  .mean(axis=0))**2)
+                                                .sum(axis=1))))
+            yield ('center first',
+                   (center_to_out := (len(perm_poss) - out_to_center - 1)))
+
+            # random for any remaining options
+            for _ in range(self.iterations - 3):
+                rng.shuffle(indices) # in-place array shuffle
+                yield 'random', indices
+
+        pbar = tqdm(total=self.iterations * len(perm_poss))
+        for i, (order, indices) in enumerate(indices_options(), start=1):
+            pbar.set_description(f'{i}/{self.iterations} - Trying '
+                                 f'{order.replace("_"," ")} indices')
+            keep = np.ones(len(perm_poss), dtype=bool)
+
+            for index in indices:
+                p = perm_poss[index]
+                stored = coverage[:, index].copy()
+                coverage[:, index] = 0
+                # use bitwise-or to check that each point is covered by at
+                #  least one tree
+                cov_prop = (np.bitwise_or.reduce(coverage, axis=1)
+                            .reshape(-1, N).sum(axis=1) / N)
+                min_cov = cov_prop.min()
+                avg_cov = cov_prop.mean()
+                if min_cov < self.min_coverage or avg_cov < self.avg_coverage:
+                    coverage[:, index] = stored
+                    best_min_cov = min_cov
+                    best_avg_cov = avg_cov
+                else:
+                    keep[index] = 0
+                pbar.update()
+
+            if (count := keep.sum()) < min_count:
+                self.min_cov_result = best_min_cov
+                self.avg_cov_result = best_avg_cov
+                best = keep.copy()
+                min_count = count
+            if self.debug:
+                print(f'iter {i}: {order}) {best_min_cov=:.3f}, '
+                      f'{best_avg_cov=:.3f}, {count=}')
+
+            # reset for next round
+            coverage = backup.copy()
+
+        pbar.close()
+
+        perm_poss = perm_poss[best]
+        self.PX, self.PY = perm_poss.T
+
+    def _perm_poss(self):
+        ''' Calculate possible perm-tree positions '''
+        # green poss, +/- v for blue poss
+        PX0, PY0 = np.meshgrid(self.CX1[0], self.CY0[:,0])
+        PX1, PY1 = np.meshgrid(self.CX0[0, 1:-1], self.CY1[:,0])
+
+        PX = np.hstack((PX0.reshape(-1), PX1.reshape(-1)))
+        PY = np.hstack((PY0.reshape(-1), PY1.reshape(-1)))
+
+        if self.extra:
+            # calculate extra points to consider (in biggest gaps
+            #  -> worse coverage, more likely to fit)
+            cocoa = self.cocoa
+            h_offset = self.primary / 2
+            # calculate circumcircle diameter (around triangle of trunks)
+            base = self.primary + cocoa.d_trunk
+            height = (self.secondary + cocoa.d_trunk) / 2
+            d_circum = (height**2 + (base**2) / 4) / height
+            # each temp tree can cover three trees in a triangle
+            # determine circumcircle center vertical offset
+            v = np.sqrt(d_circum**2 - (self.primary + cocoa.d_trunk)**2) / 2
+            above = PY + v
+            below = PY - v
+
+            PX = np.hstack([PX]*3)
+            PY = np.hstack((above, PY, below))
+
+        pts = np.array((PX, PY)).T
+
+        # remove any too close to temp trees
+        min_sep2 = self.perm_shade.min_dist ** 2
+        for temp in zip(self.TX, self.TY):
+            pts = pts[((pts - temp)**2).sum(axis=1) > min_sep2]
+
+        self.insufficient = ('Failed to create sufficient perm-tree '
+                             'locations.\n Consider trying extra with `-e`,'
+                             'or reducing `--perm_min_dist` (`-pm`) or '
+                             '`--perm_trunk` (`-pt`)')
+        r_perm = self.perm_shade.d_canopy * self.perm_shade.shade_factor / 2
+        assert len(pts) > (self.dims[0] * self.dims[1]
+                           / r_perm**2), self.insufficient
+        return pts
+
+    def circ_sample(self):
+        ''' Uniform sample of cocoa canopy disk using sunflower arrangement.
+
+        Samples 'samples' points in a circle of radius cocoa.d_canopy / 2.
+
+        wolframcloud.com/objects/demonstrations/SunflowerSeedArrangements-source.nb
+
+        '''
+        phi = (np.sqrt(5) + 1) / 2
+        n = np.arange(1, self.samples+1)
+        r = np.sqrt(n)
+        r /= r[-1] # normalise to 0-1 range
+        r *= self.cocoa.d_canopy / 2
+        theta = 2 * n * np.pi / phi**2
+        return np.column_stack((r * np.cos(theta), r * np.sin(theta)))
 
     def display_results(self, verbose=True):
-        """
-        X,Y = np.meshgrid(np.arange(0, width, grid_size),
-                        np.arange(0, length, grid_size))
-        Z = np.empty(X.shape)
-        for index, type_ in enumerate(types):
-            spacing = type_.grid_spacing
-            Z[(X % spacing == 0) & (Y % spacing == 0)] = index
-        """
         dims = self.dims
 
         def circle(x, y, d, **kwargs):
@@ -246,13 +421,20 @@ class CocoaFarm:
             r = d / 2 # convert to radius
             return go.layout.Shape(x0=x-r, y0=y-r, x1=x+r, y1=y+r, **kwargs)
 
+        pbar = tqdm(total=14+self.debug)
+        pbar.set_description('Initialising plot')
         fig = go.Figure()
-        fig.update_layout(title=f'{dims[0]}x{dims[1]}m Cocoa Farm - {self.temp_shade.d_canopy}m temp canopy')
+        fig.update_layout(title=(f'{dims[0]}x{dims[1]}m Cocoa Farm - '
+                                 f'min-coverage={self.min_cov_result:.3f}, '
+                                 f'avg-coverage={self.avg_cov_result:.3f}'))
+        pbar.update()
 
         shapes = []
         clear = 'rgba(0,0,0,0)'
         for tree, (X, Y) in ((self.cocoa, (self.CX, self.CY)),
-                             (self.temp_shade, (self.TX, self.TY))):
+                             (self.temp_shade, (self.TX, self.TY)),
+                             (self.perm_shade, (self.PX, self.PY))):
+            pbar.set_description(f'Plotting {tree.name} Trees')
             color = ','.join(str(c) for c in tree.color)
 
             canopy_kwargs = dict(type='circle', xref='x', yref='y',
@@ -262,62 +444,96 @@ class CocoaFarm:
             bound_kwargs = {**canopy_kwargs, 'fillcolor': clear,
                             'line_dash': 'dashdot', 'line_color': 'red'}
 
-            plot_components = [(tree.d_canopy, canopy_kwargs),
-                               (tree.d_trunk, trunk_kwargs),
-                               (tree.min_dist, bound_kwargs)]
+            plot_components = [('canopies', tree.d_canopy, canopy_kwargs),
+                               ('trunks', tree.d_trunk, trunk_kwargs),
+                               ('bound-lines', tree.min_dist, bound_kwargs)]
 
             if isinstance(tree, ShadeTree) and self.view_shade:
                 shade_kwargs = {**canopy_kwargs,
                                 'fillcolor': f'rgba({color},0.2)'}
-                plot_components.append((tree.d_canopy * tree.shade_factor,
+                plot_components.append(('factored-shade',
+                                        tree.d_canopy * tree.shade_factor,
                                         shade_kwargs))
 
-            for x,y in zip(X,Y):
-                for d, kwargs in plot_components:
+            for stage, d, kwargs in plot_components:
+                pbar.set_description(f'Plotting {tree.name} {stage}')
+                for x,y in zip(X,Y):
                     shapes.append(circle(x, y, d, **kwargs))
+                pbar.update()
 
             fig.add_trace(go.Scatter(name=f'{tree.name} ({X.size})', x=X, y=Y,
                                     mode='markers',
                                     marker=dict(color=f'rgb({color})')))
 
+        if self.debug:
+            pbar.set_description('Plotting sampled points')
+            fig.add_trace(
+                go.Scatter(name='samples', x=self.sample_result[:,0],
+                           y=self.sample_result[:,1], mode='markers'))
+            pbar.update()
+
+        pbar.set_description('Registering plot elements')
         fig.update_layout(shapes=shapes, showlegend=True)
         fig.add_shape(type='rect', x0=0, y0=0, x1=dims[0], y1=dims[1])
         fig.update_yaxes(scaleanchor='x', scaleratio=1)# axis equal
+
+        pbar.update()
+
+        pbar.set_description('Displaying plot')
+        fig.show()
+        pbar.update()
+        pbar.close()
 
         if verbose:
             print(f'Plotting {dims[0]}x{dims[1]}m plot')
             print(f' -> {self.CX.size} cocoa trees')
             print(f' -> {self.TX.size} temp shade trees')
-            #print(f' -> {self.PX.size} perm shade trees')
-        fig.show()
+            print(f' -> {self.PX.size} perm shade trees')
 
 
 if __name__ == '__main__':
     description = '''
     Example for cocoa growing with temporary and permanent shade trees.
     '''
+    import inspect
     from argparse import ArgumentParser
+
+    def get_defaults(cls, method='__init__'):
+        signature = inspect.signature(getattr(cls, method))
+        return {k: v.default
+                for k, v in signature.parameters.items()
+                if v.default is not inspect.Parameter.empty}
+
+    farm = get_defaults(CocoaFarm)
+
     parser = ArgumentParser(description=description)
     parser.add_argument('-d', '--dims', type=float, nargs=2, default=(100,100),
-                        help='dimensions (width, height) of the plot [m]')
+                        help='dimensions (width <= height) of the plot [m]')
     parser.add_argument('-n', '--no_shade', action='store_true',
                         help='flag to turn off viewing factored shade regions')
     parser.add_argument('-q', '--quiet', action='store_true',
                         help='turn off verbose status prints')
-
-
-    import inspect
-    empty = inspect.Parameter.empty
+    parser.add_argument('-i', '--iterations', default=farm['iterations'],
+                        type=int, help='number of perm-tree ')
+    parser.add_argument('--samples', default=farm['samples'], type=int,
+                        help='number of cocoa samples for perm coverage')
+    parser.add_argument('--min_coverage', default=farm['min_coverage'],
+                        type=float, help=('minimum cocoa tree perm coverage '
+                                          'proportion [0,1)'))
+    parser.add_argument('--avg_coverage', default=farm['avg_coverage'],
+                        type=float, help=('minimum average cocoa tree perm '
+                                          'coverage proportion [0,1)'))
+    parser.add_argument('-e', '--extra', action='store_true',
+                        help='flag to try additional perm-tree locations')
+    parser.add_argument('--debug', action='store_true',
+                        help='extra display when output')
 
     for tree in (Cocoa, TempShade, PermShade):
         prefix = tree.__name__.replace('Shade', '').lower()
         p = prefix[0]
         Prefix = prefix.title()
         # get the class default initialisation values programatically
-        signature = inspect.signature(tree.__init__)
-        defaults = {k: v.default
-                    for k, v in signature.parameters.items()
-                    if v.default is not empty}
+        defaults = get_defaults(tree)
 
         parser.add_argument(f'-{p}c', f'--{prefix}_canopy',
                             type=float, default=defaults['d_canopy'],
@@ -344,5 +560,7 @@ if __name__ == '__main__':
                      args.perm_shade_factor)
 
     # create the cocoa farm and display the resulting tree configuration
-    farm = CocoaFarm(args.dims, cocoa, temp, perm, not args.no_shade)
+    farm = CocoaFarm(args.dims, cocoa, temp, perm, not args.no_shade,
+                     args.min_coverage, args.avg_coverage, args.iterations,
+                     args.samples, args.extra, args.debug)
     farm.calculate_and_display()

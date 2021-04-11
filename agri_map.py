@@ -351,7 +351,7 @@ class CocoaFarm:
 
     def _perm_poss(self):
         ''' Calculate possible perm-tree positions '''
-        # green poss, +/- v for blue poss
+        # start with between every neighbouring horizontal pair of cocoa trees
         PX0, PY0 = np.meshgrid(self.CX1[0], self.CY0[:,0])
         PX1, PY1 = np.meshgrid(self.CX0[0, 1:-1], self.CY1[:,0])
 

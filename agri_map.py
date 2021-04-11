@@ -419,9 +419,9 @@ class CocoaFarm:
         pbar = tqdm(total=14+self.debug)
         pbar.set_description('Initialising plot')
         fig = go.Figure()
-        fig.update_layout(title=(f'{dims[0]}x{dims[1]}m Cocoa Farm - '
-                                 f'min-coverage={self.min_cov_result:.3f}, '
-                                 f'avg-coverage={self.avg_cov_result:.3f}'))
+        fig.update_layout(title=(f'{dims[0]}x{dims[1]}m Cocoa Farm  -  '
+                                 f'min-cov={self.min_cov_result:.3f}, '
+                                 f'avg-cov={self.avg_cov_result:.3f}'))
         pbar.update()
 
         shapes = []
@@ -445,7 +445,7 @@ class CocoaFarm:
 
             if isinstance(tree, ShadeTree) and self.view_shade:
                 shade_kwargs = {**canopy_kwargs,
-                                'fillcolor': f'rgba({color},0.2)'}
+                                'fillcolor': f'rgba({color},0.3)'}
                 plot_components.append(('factored-shade',
                                         tree.d_canopy * tree.shade_factor,
                                         shade_kwargs))

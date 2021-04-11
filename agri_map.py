@@ -70,7 +70,7 @@ class PermShade(ShadeTree):
         'd_trunk' is the trunk diameter [m]. Default 1m.
         'd_canopy' is the canopy diameter [m]. Default 15m.
         'min_dist' is the minimum center-center distance to any surrounding
-            trees. If left as None, defaults to (2 * d_trunk).
+            trees. If left as None, defaults to (d_trunk + 0.25).
         'shade_factor' is a multiplier of d_canopy determining where is
             considered to be adequately shaded. Helps to reduce shade
             redundancy for the majority of the day when the sun isn't directly
@@ -80,7 +80,7 @@ class PermShade(ShadeTree):
 
         '''
         # keep if set, or replace with default
-        min_dist = min_dist or (2 * d_trunk)
+        min_dist = min_dist or (d_trunk * 0.25)
         super().__init__('Perm Shade', d_trunk, d_canopy, min_dist, color,
                          shade_factor)
 

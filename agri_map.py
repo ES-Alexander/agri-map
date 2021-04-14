@@ -120,6 +120,7 @@ class CocoaFarm:
     samples: int = 20
     extra: bool = False
     debug: bool = False
+    # TODO add boundary dist for cocoa trunks
 
     def calculate_and_display(self, verbose=True):
         self.optimise_spacings()
@@ -281,7 +282,6 @@ class CocoaFarm:
         #  tree loses its required coverage, or the average coverage becomes
         #  too low
         backup = coverage.copy()
-        rng = np.random.default_rng()
         min_count = len(perm_poss)
         best = None
 
@@ -304,6 +304,7 @@ class CocoaFarm:
                    (center_to_out := (len(perm_poss) - out_to_center - 1)))
 
             # random for any remaining options
+            rng = np.random.default_rng()
             for _ in range(self.iterations - 3):
                 rng.shuffle(indices) # in-place array shuffle
                 yield 'random', indices
@@ -315,21 +316,24 @@ class CocoaFarm:
             keep = np.ones(len(perm_poss), dtype=bool)
 
             for index in indices:
-                p = perm_poss[index]
-                stored = coverage[:, index].copy()
-                coverage[:, index] = 0
+                p = perm_poss[index] # get a tree
+                stored = coverage[:, index].copy() # save its coverage for later
+                coverage[:, index] = 0 # try removing the tree
                 # use bitwise-or to check that each point is covered by at
-                #  least one tree
+                #  least one tree -> array of cocoa tree coverage percentages
                 cov_prop = (np.bitwise_or.reduce(coverage, axis=1)
                             .reshape(-1, N).sum(axis=1) / N)
                 min_cov = cov_prop.min()
                 avg_cov = cov_prop.mean()
                 if min_cov < self.min_coverage or avg_cov < self.avg_coverage:
+                    # failed -> put the tree back
                     coverage[:, index] = stored
+                else:
+                    # worked -> don't need that tree
+                    keep[index] = 0
                     best_min_cov = min_cov
                     best_avg_cov = avg_cov
-                else:
-                    keep[index] = 0
+
                 pbar.update()
 
             if (count := keep.sum()) < min_count:
@@ -338,8 +342,8 @@ class CocoaFarm:
                 best = keep.copy()
                 min_count = count
             if self.debug:
-                print(f'iter {i}: {order}) {best_min_cov=:.3f}, '
-                      f'{best_avg_cov=:.3f}, {count=}')
+                print(f'\niter {i}: {order}) {best_min_cov=:.3f}, '
+                      f'{best_avg_cov=:.3f}, {count=}\n', flush=True)
 
             # reset for next round
             coverage = backup.copy()

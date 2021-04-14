@@ -100,7 +100,7 @@ class CocoaFarm:
     'min_coverage' is the minimum allowed permanent shade coverage of any
         single cocoa tree.
     'avg_coverage' is the minimum allowed average permanent shade coverage of
-        all the cocoao trees.
+        all the cocoa trees.
     'iterations' is the number of runs for perm-tree reduction - used to
         ensure that the result is relatively optimal (low number of perm shade
         trees).
@@ -423,9 +423,12 @@ class CocoaFarm:
         pbar = tqdm(total=14+self.debug)
         pbar.set_description('Initialising plot')
         fig = go.Figure()
-        fig.update_layout(title=(f'{dims[0]}x{dims[1]}m Cocoa Farm  -  '
-                                 f'min-cov={self.min_cov_result:.3f}, '
-                                 f'avg-cov={self.avg_cov_result:.3f}'))
+        fig.update_layout(title=f'{dims[0]}x{dims[1]}m Cocoa Farm')
+
+        text = self.gen_plot_text()
+        fig.add_annotation(text=text, xref='paper', yref='paper',
+                           x=0.95, y=0.5, showarrow=False)
+
         pbar.update()
 
         shapes = []
@@ -488,6 +491,30 @@ class CocoaFarm:
             print(f' -> {self.CX.size} cocoa trees')
             print(f' -> {self.TX.size} temp shade trees')
             print(f' -> {self.PX.size} perm shade trees')
+
+    def gen_plot_text(self):
+        sep = '<br> ' # text is parsed as HTML
+        min_cov = self.min_cov_result * 100
+        avg_cov = self.avg_cov_result * 100
+        text = ('Coverage:{sep}'
+                f'{min_cov=:.1f}% >= {self.min_coverage * 100}%{sep}'
+                f'{avg_cov=:.1f}% >= {self.avg_coverage * 100}%{sep*2}')
+
+        for index, tree in enumerate((self.cocoa, self.temp_shade,
+                                      self.perm_shade)):
+            name = tree.name
+            d_trunk = tree.d_trunk
+            d_canopy = tree.d_canopy
+            min_dist = tree.min_dist
+            text += sep.join((name, f'{d_trunk=:.2f}m', f'{d_canopy=:.2f}m',
+                              f'{min_dist=:.2f}m'))
+            if isinstance(tree, ShadeTree):
+                shade_factor = tree.shade_factor
+                text += f'{sep}{shade_factor=:.2f}'
+
+            text += sep * 2
+        return text
+
 
 
 if __name__ == '__main__':

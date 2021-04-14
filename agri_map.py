@@ -427,7 +427,7 @@ class CocoaFarm:
 
         text = self.gen_plot_text()
         fig.add_annotation(text=text, xref='paper', yref='paper',
-                           x=0.95, y=0.5, showarrow=False)
+                           x=0.95, y=0.5, showarrow=False, align='left')
 
         pbar.update()
 
@@ -496,7 +496,7 @@ class CocoaFarm:
         sep = '<br> ' # text is parsed as HTML
         min_cov = self.min_cov_result * 100
         avg_cov = self.avg_cov_result * 100
-        text = ('Coverage:{sep}'
+        text = (f'<b>Coverage:</b>{sep}'
                 f'{min_cov=:.1f}% >= {self.min_coverage * 100}%{sep}'
                 f'{avg_cov=:.1f}% >= {self.avg_coverage * 100}%{sep*2}')
 
@@ -506,13 +506,13 @@ class CocoaFarm:
             d_trunk = tree.d_trunk
             d_canopy = tree.d_canopy
             min_dist = tree.min_dist
-            text += sep.join((name, f'{d_trunk=:.2f}m', f'{d_canopy=:.2f}m',
-                              f'{min_dist=:.2f}m'))
+            text += sep.join((f'<b>{name}:</b>', f'{d_trunk=:.2f}m',
+                              f'{d_canopy=:.2f}m', f'{min_dist=:.2f}m'))
             if isinstance(tree, ShadeTree):
                 shade_factor = tree.shade_factor
                 text += f'{sep}{shade_factor=:.2f}'
 
-            text += sep * 2
+            text += '<br>'*2
         return text
 
 

@@ -107,6 +107,8 @@ class CocoaFarm:
     'samples' is the number of points to sample in each cocoa tree, when
         estimating coverage percentage. More samples is more accurate but
         uses more memory and takes longer.
+    'boundary_dist' is the minimum distance between the center of a cocoa
+        trunk and the boundary.
 
     '''
     dims: tuple = (100, 100)
@@ -120,7 +122,7 @@ class CocoaFarm:
     samples: int = 20
     extra: bool = False
     debug: bool = False
-    # TODO add boundary dist for cocoa trunks
+    boundary_dist: float = cocoa.d_trunk
 
     def calculate_and_display(self, verbose=True):
         self.optimise_spacings()
@@ -143,7 +145,7 @@ class CocoaFarm:
         dims = min(self.dims), max(self.dims)
         cocoa = self.cocoa
         # adjust dimensions to ensure cocoa canopies stay inside the plot
-        adjusted_dims = [side - cocoa.d_canopy for side in dims]
+        adjusted_dims = [side - 2*self.boundary_dist for side in dims]
         # use expansion index to determine even spacing of the main grid
         primary_adjusted = adjusted_dims[0]
         primary_spacing  = (primary_adjusted /
@@ -157,17 +159,17 @@ class CocoaFarm:
                               (secondary_adjusted // secondary_spacing)) / 2
         # set up spacing and offset variables for both directions
         cocoa_r = cocoa.d_canopy / 2
-        major_offset = cocoa_r
-        half_step = (cocoa_r + primary_spacing / 2,
-                     cocoa_r + secondary_spacing / 2)
-        half_max = (dims[0] - cocoa_r, dims[1] - cocoa_r)
+        major_offset = self.boundary_dist
+        half_step = (self.boundary_dist + primary_spacing / 2,
+                     self.boundary_dist + secondary_spacing / 2)
+        half_max = (dims[0] - self.boundary_dist, dims[1] - self.boundary_dist)
 
         # create the main and secondary grids
-        cocoa_r /= 1.0001 # handle float inaccuracy
+        fuzzy_boundary = self.boundary_dist / 1.0001 # handle float inaccuracy
 
-        X0,Y0 = np.meshgrid(np.arange(major_offset, dims[0] - cocoa_r,
+        X0,Y0 = np.meshgrid(np.arange(major_offset, dims[0] - fuzzy_boundary,
                                       primary_spacing),
-                            np.arange(major_offset, dims[1] - cocoa_r,
+                            np.arange(major_offset, dims[1] - fuzzy_boundary,
                                       secondary_spacing))
         X1,Y1 = np.meshgrid(np.arange(half_step[0], half_max[0],
                                       primary_spacing),
@@ -439,12 +441,12 @@ class CocoaFarm:
             pbar.set_description(f'Plotting {tree.name} Trees')
             color = ','.join(str(c) for c in tree.color)
 
-            canopy_kwargs = dict(type='circle', xref='x', yref='y',
-                                fillcolor=f'rgba({color},0.5)',
-                                line_color=clear)
+            canopy_kwargs = dict(type='circle',xref='x',yref='y',
+                                 fillcolor=f'rgba({color},0.5)',
+                                 line_color=clear)
             trunk_kwargs = {**canopy_kwargs, 'fillcolor': f'rgb({color})'}
             bound_kwargs = {**canopy_kwargs, 'fillcolor': clear,
-                            'line_dash': 'dashdot', 'line_color': 'red'}
+                            'line_color': 'red','line_dash': 'dashdot'}
 
             plot_components = [('canopies', tree.d_canopy, canopy_kwargs),
                                ('trunks', tree.d_trunk, trunk_kwargs),
@@ -464,8 +466,9 @@ class CocoaFarm:
                 pbar.update()
 
             fig.add_trace(go.Scatter(name=f'{tree.name} ({X.size})', x=X, y=Y,
-                                    mode='markers',
-                                    marker=dict(color=f'rgb({color})')))
+                                     mode='markers',
+                                     marker=dict(color=f'rgb({color})'),
+                                     legendgroup=f'{tree.name}'))
 
         if self.debug:
             pbar.set_description('Plotting sampled points')
@@ -475,9 +478,25 @@ class CocoaFarm:
             pbar.update()
 
         pbar.set_description('Registering plot elements')
-        fig.update_layout(shapes=shapes, showlegend=True)
+        fig.update_layout(shapes=shapes)
+        fig.update_layout(legend=dict(
+            orientation='h',
+            yanchor='bottom',
+            y=1.02,
+            xanchor='right',
+            x=1
+        ))
         fig.add_shape(type='rect', x0=0, y0=0, x1=dims[0], y1=dims[1])
         fig.update_yaxes(scaleanchor='x', scaleratio=1)# axis equal
+
+        """ # TODO link tree component cicles to legend clicks
+        def legend_click(*a, **kw):
+            ... # do something - NOTE: in JS land (`print` doesn't work because
+                #  plot is no longer connected to the Python program that
+                #  created it)
+
+        fig.layout.on_change(legend_click, 'legend')
+        # """
 
         pbar.update()
 
@@ -541,6 +560,9 @@ if __name__ == '__main__':
                         help='flag to turn off viewing factored shade regions')
     parser.add_argument('-q', '--quiet', action='store_true',
                         help='turn off verbose status prints')
+    parser.add_argument('-b', '--boundary_dist', type=float, default=None,
+                        help='distance from cocoa trunk center to boundaries'
+                             ' (default is one cocoa trunk diameter)')
     parser.add_argument('-i', '--iterations', default=farm['iterations'],
                         type=int, help='number of perm-tree ')
     parser.add_argument('--samples', default=farm['samples'], type=int,
@@ -587,8 +609,10 @@ if __name__ == '__main__':
     perm = PermShade(args.perm_trunk, args.perm_canopy, args.perm_min_dist,
                      args.perm_shade_factor)
 
+    boundary_dist = args.boundary_dist or cocoa.d_trunk
+
     # create the cocoa farm and display the resulting tree configuration
     farm = CocoaFarm(args.dims, cocoa, temp, perm, not args.no_shade,
                      args.min_coverage, args.avg_coverage, args.iterations,
-                     args.samples, args.extra, args.debug)
+                     args.samples, args.extra, args.debug, boundary_dist)
     farm.calculate_and_display()

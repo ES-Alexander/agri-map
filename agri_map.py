@@ -201,11 +201,12 @@ class CocoaFarm:
             offset = (temp.min_dist + cocoa.d_trunk/2) / np.sqrt(2)
             self.TX = self.CX.reshape(-1) + offset
             self.TY = self.CY.reshape(-1) + offset
+            # TODO handle trees outside on right side and top
         elif d_shade < self.primary + cocoa.d_trunk:
             # each temp tree can cover max two trees on the diagonal
             self.TX = self.CX0.reshape(-1) + self.primary / 4
             self.TY = self.CY0.reshape(-1) + self.secondary / 4
-            # TODO handle trees outside on the right side (unlikely to occur)
+            # TODO handle trees outside on the right side and top
             """
             right_limit = self.dims[0] - temp.d_trunk / 2
             if TX.max() > right_limit:

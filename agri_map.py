@@ -103,7 +103,7 @@ class CocoaFarm:
         all the cocoa trees.
     'iterations' is the number of runs for perm-tree reduction - used to
         ensure that the result is relatively optimal (low number of perm shade
-        trees).
+        trees). First 5 are logical/intelligent, then random shuffles.
     'samples' is the number of points to sample in each cocoa tree, when
         estimating coverage percentage. More samples is more accurate but
         uses more memory and takes longer.
@@ -122,6 +122,7 @@ class CocoaFarm:
     samples: int = 20
     extra: bool = False
     debug: bool = False
+    cov_focus: bool = False
     boundary_dist: float = cocoa.d_trunk
 
     def calculate_and_display(self, verbose=True):
@@ -258,9 +259,15 @@ class CocoaFarm:
                 top = rows if not odd else rows - 1
                 TX0 = self.CX0[:top,::3].reshape(-1)
                 TY0 = self.CY0[:top,::3].reshape(-1) + v
+                right0 = TX0 > self.dims[0] - self.boundary_dist - h_offset
+                TX0[right0] -= h_offset
+                TY0[right0] += self.secondary / 2 - v
                 # offset secondary rows by one for flipped side
                 TX1 = self.CX1[:,1::3].reshape(-1)
                 TY1 = self.CY1[:,1::3].reshape(-1) - v
+                right1 = TX1 > self.dims[0] - self.boundary_dist - h_offset
+                TX1[right1] -= h_offset
+                TY1[right1] -= self.secondary / 2 - v
                 X_stack = [TX0, TX1]
                 Y_stack = [TY0, TY1]
                 if odd: # handle top row
@@ -345,21 +352,22 @@ class CocoaFarm:
             indices = creation_order = np.arange(len(perm_poss))
             # intelligent options
             yield 'creation', creation_order
+            diff = (perm_poss-perm_poss.mean(axis=0))
             yield ('out first',
-                   (out_to_center := np.argsort(((perm_poss-perm_poss
-                                                  .mean(axis=0))**2)
-                                                .sum(axis=1))))
-            yield ('center first',
-                   (center_to_out := (len(perm_poss) - out_to_center - 1)))
+                   (out_to_center := np.argsort((diff**2).sum(axis=1))))
+            yield ('manhattan out', # out first but by manhattan distance (L1)
+                   (out_man := np.argsort(diff.sum(axis=1))))
+            yield ('center first', (len(perm_poss) - out_to_center - 1))
+            yield ('manhattan center', (len(perm_poss) - out_man - 1))
 
             # random for any remaining options
             rng = np.random.default_rng()
-            for _ in range(self.iterations - 3):
+            for _ in range(self.iterations - 5):
                 rng.shuffle(indices) # in-place array shuffle
                 yield 'random', indices
 
         with tqdm(total=self.iterations * len(perm_poss)) as pbar:
-            self._selective_perm_remove(indices_options, perm_poss, coverage,
+            self._selective_perm_remove(indices_options(), perm_poss, coverage,
                                         N, pbar)
 
     def _selective_perm_remove(self, indices_options, perm_poss, coverage, N,
@@ -375,7 +383,9 @@ class CocoaFarm:
         min_count = len(perm_poss)
         best = None
 
-        for i, (order, indices) in enumerate(indices_options(), start=1):
+        for i in range(self.iterations):
+            order, indices = next(indices_options)
+            i += 1
             pbar.set_description(f'{i}/{self.iterations} - Trying '
                                  f'{order.replace("_"," ")} indices')
             keep = np.ones(len(perm_poss), dtype=bool)
@@ -401,7 +411,10 @@ class CocoaFarm:
 
                 pbar.update()
 
-            if (count := keep.sum()) < min_count:
+            if ((count := keep.sum()) < min_count or
+                (self.cov_focus and count == min_count and
+                 (best_min_cov < self.min_cov_result or
+                  best_avg_cov < self.avg_cov_result))):
                 self.min_cov_result = best_min_cov
                 self.avg_cov_result = best_avg_cov
                 best = keep.copy()
@@ -500,8 +513,8 @@ class CocoaFarm:
         shapes = []
         clear = 'rgba(0,0,0,0)'
         for tree, (X, Y) in ((self.cocoa, (self.CX, self.CY)),
-                             (self.temp_shade, (self.TX, self.TY))):#,
-                             #(self.perm_shade, (self.PX, self.PY))):
+                             (self.temp_shade, (self.TX, self.TY)),
+                             (self.perm_shade, (self.PX, self.PY))):
             pbar.set_description(f'Plotting {tree.name} Trees')
             color = ','.join(str(c) for c in tree.color)
 
@@ -626,7 +639,8 @@ if __name__ == '__main__':
                         help='distance from cocoa trunk center to boundaries'
                              ' (default is one cocoa trunk diameter)')
     parser.add_argument('-i', '--iterations', default=farm['iterations'],
-                        type=int, help='number of perm-tree ')
+                        type=int, help='number of perm-tree runs (first 5 are'
+                                       ' logical/intelligent, rest random)')
     parser.add_argument('--samples', default=farm['samples'], type=int,
                         help='number of cocoa samples for perm coverage')
     parser.add_argument('--min_coverage', default=farm['min_coverage'],
@@ -635,6 +649,9 @@ if __name__ == '__main__':
     parser.add_argument('--avg_coverage', default=farm['avg_coverage'],
                         type=float, help=('minimum average cocoa tree perm '
                                           'coverage proportion [0,1)'))
+    parser.add_argument('--cov_focus', action='store_true',
+                        help='flag for preferring less coverage over order'
+                             ' (given the same number of perm trees)')
     parser.add_argument('-e', '--extra', action='store_true',
                         help='flag to try additional perm-tree locations')
     parser.add_argument('--debug', action='store_true',
@@ -676,5 +693,6 @@ if __name__ == '__main__':
     # create the cocoa farm and display the resulting tree configuration
     farm = CocoaFarm(args.dims, cocoa, temp, perm, not args.no_shade,
                      args.min_coverage, args.avg_coverage, args.iterations,
-                     args.samples, args.extra, args.debug, boundary_dist)
+                     args.samples, args.extra, args.debug, args.cov_focus,
+                     boundary_dist)
     farm.calculate_and_display()

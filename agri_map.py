@@ -492,6 +492,13 @@ class CocoaFarm:
         with tqdm(total=14+self.debug) as pbar:
             self._display_results(verbose, pbar)
 
+        if verbose:
+            print(f'Plotting {self.dims[0]}x{self.dims[1]}m plot\n'
+                  f' -> {self.CX.size} cocoa trees\n'
+                  f' -> {self.TX.size} temp shade trees\n'
+                  f' -> {self.PX.size} perm shade trees')
+
+
     def _display_results(self, verbose, pbar):
         dims = self.dims
 
@@ -580,13 +587,7 @@ class CocoaFarm:
         pbar.set_description('Displaying plot')
         fig.show()
         pbar.update()
-
-        if verbose:
-            print(f'Plotting {dims[0]}x{dims[1]}m plot\n'
-                  f' -> {self.CX.size} cocoa trees\n'
-                  f' -> {self.TX.size} temp shade trees\n'
-                  f' -> {self.PX.size} perm shade trees')
-
+ 
     def gen_plot_text(self):
         sep = '<br> ' # text is parsed as HTML
         min_cov = self.min_cov_result * 100

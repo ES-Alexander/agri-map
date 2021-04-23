@@ -129,20 +129,19 @@ class CocoaFarm:
         self.display_results(verbose)
 
     def optimise_spacings(self):
-        pbar = tqdm(total=3)
-        for name, func in (('cocoa', self.optimise_cocoa_spacings),
-                           ('temp shade', self.optimise_temp_spacings),
-                           ('perm shade', self.optimise_perm_spacings)):
-            pbar.set_description(f'Optimising {name} tree spacings')
-            func()
-            pbar.update()
-        pbar.close()
+        with tqdm(total=3) as pbar:
+            for name, func in (('cocoa', self.optimise_cocoa_spacings),
+                               ('temp shade', self.optimise_temp_spacings),
+                               ('perm shade', self.optimise_perm_spacings)):
+                pbar.set_description(f'Optimising {name} tree spacings')
+                func()
+                pbar.update()
 
     def optimise_cocoa_spacings(self):
         # Optimal cocoa spacing comes from flat gaps along the shorter axis
         #  and staggered gaps along the longer one.
         # Ensure first index is the smallest.
-        dims = min(self.dims), max(self.dims)
+        dims = self.dims = min(self.dims), max(self.dims)
         cocoa = self.cocoa
         # adjust dimensions to ensure cocoa canopies stay inside the plot
         adjusted_dims = [side - 2*self.boundary_dist for side in dims]
@@ -185,11 +184,8 @@ class CocoaFarm:
 
     def optimise_temp_spacings(self):
         '''
-
         NOTE: assumes x is the narrower axis, so vertical (y) is secondary.
-
         '''
-        # !!TODO!! check and make sure this still works for primary on y-axis
         temp = self.temp_shade
         cocoa = self.cocoa
         d_shade = temp.d_canopy * temp.shade_factor
@@ -198,23 +194,39 @@ class CocoaFarm:
             # requires one temp shade tree per cocoa tree
             #  put as close as possible, at 45 degrees, to try to ensure
             #  all temp shade trees end up in the grid.
-            offset = (temp.min_dist + cocoa.d_trunk/2) / np.sqrt(2)
-            self.TX = self.CX.reshape(-1) + offset
-            self.TY = self.CY.reshape(-1) + offset
-            # TODO handle trees outside on right side and top
+            r = (temp.min_dist + cocoa.d_trunk/2)
+            offset = r / np.sqrt(2)
+            TX = self.CX + offset
+            TY = self.CY + offset
+            # handle trees above the top boundary (rotate to RHS)
+            top = TY > self.dims[1] - self.boundary_dist
+            TX[top] += r - offset
+            TY[top] -= offset
+            # handle trees outside the right boundary (rotate to above)
+            right = TX > self.dims[0] - self.boundary_dist
+            TX[right] -= offset
+            TY[right] += r - offset
+            # if odd number of rows, remove top right temp tree
+            remove = top & right
+            self.TX, self.TY = TX[~remove], TY[~remove]
         elif d_shade < self.primary + cocoa.d_trunk:
             # each temp tree can cover max two trees on the diagonal
-            self.TX = self.CX0.reshape(-1) + self.primary / 4
-            self.TY = self.CY0.reshape(-1) + self.secondary / 4
-            # TODO handle trees outside on the right side and top
-            """
-            right_limit = self.dims[0] - temp.d_trunk / 2
-            if TX.max() > right_limit:
-                out_on_right = TX > right_limit
-                TX[out_on_right] 
-
-            # , and possibly top
-            """
+            TX = self.CX0.reshape(-1) + self.primary / 4
+            TY = self.CY0.reshape(-1) + self.secondary / 4
+            # handle trees outside on the right side and top
+            r = np.sqrt(self.primary**2 + self.secondary**2) / 4
+            theta = np.arctan(self.secondary / self.primary)
+            # handle trees above the top boundary (rotate to RHS)
+            top = TY > self.dims[1] - self.boundary_dist
+            TX[top] += r - self.primary / 4
+            TY[top] -= self.secondary / 4
+            # handle trees outside the right boundary (rotate to above)
+            right = TX > self.dims[0] - self.boundary_dist
+            TX[right] -= self.primary / 4
+            TY[right] += r - self.secondary / 4
+            # if odd number of rows, remove top right temp tree
+            remove = top & right
+            self.TX, self.TY = TX[~remove], TY[~remove]
         else:
             h_offset = self.primary / 2
             # calculate circumcircle diameter (around triangle of trunks)
@@ -231,7 +243,8 @@ class CocoaFarm:
                 # offset horizontally to half-way between each pair
                 TX = np.hstack((TX0, TX1)) + h_offset
                 # handle trees outside on the right
-                TX[TX > self.dims[0]] -= self.primary
+                right = TX > self.dims[0] - self.boundary_dist
+                TX[right] -= self.primary
                 self.TX = TX
                 self.TY = np.hstack((TY0, TY1))
             elif d_shade < self.secondary + cocoa.d_trunk:
@@ -240,23 +253,63 @@ class CocoaFarm:
                 v = np.sqrt(d_circum**2
                             - (self.primary + cocoa.d_trunk)**2) / 2
                 # get every third tree position horizontally
-                TX0 = self.CX0[:,::3].reshape(-1)
-                TY0 = self.CY0[:,::3].reshape(-1) + v
+                rows = len(self.CX0)
+                odd = rows % 2
+                top = rows if not odd else rows - 1
+                TX0 = self.CX0[:top,::3].reshape(-1)
+                TY0 = self.CY0[:top,::3].reshape(-1) + v
                 # offset secondary rows by one for flipped side
                 TX1 = self.CX1[:,1::3].reshape(-1)
                 TY1 = self.CY1[:,1::3].reshape(-1) - v
-                self.TX = np.hstack((TX0, TX1)) + h_offset
-                self.TY = np.hstack((TY0, TY1))
-                # TODO check full coverage and ensure no shade trees can be
-                #  outside boundary
+                X_stack = [TX0, TX1]
+                Y_stack = [TY0, TY1]
+                if odd: # handle top row
+                    top_X = self.CX0[-1,::2]
+                    if top_X.size % 2:
+                        top_X = top_X[:-1]
+                    top_Y = np.repeat(self.CY0[-1,0], top_X.size)
+                    X_stack.append(top_X)
+                    Y_stack.append(top_Y)
+                self.TX = np.hstack(X_stack) + h_offset
+                self.TY = np.hstack(Y_stack)
             else: # assume tree is only large enough to cover a diamond of 4
-                TX0 = self.CX0[::2,::2].reshape(-1)
-                TY0 = self.CY0[::2,::2].reshape(-1)
-                TX1 = self.CX0[1::2,1::2].reshape(-1)
-                TY1 = self.CY0[1::2,1::2].reshape(-1)
-                self.TX = np.hstack((TX0, TX1)) + h_offset
-                self.TY = np.hstack((TY0, TY1))
-                # TODO handle missing coverage and ones outside boundary
+                
+                TX0 = self.CX0[::2,::2]
+                TY0 = self.CY0[::2,::2]
+                TX1 = self.CX0[1::2,1::2]
+                TY1 = self.CY0[1::2,1::2]
+                # move in trees outside right side, and add extras on left side
+                odd_cols = self.CX0.shape[1] % 2
+                if odd_cols:
+                    TX0[:,-1] -= self.primary
+                else:
+                    TX1[:,-1] -= self.primary
+                left_Y = TY1[:,0]
+                left_X = np.repeat(TX0[0,0], left_Y.size)
+
+                # create lists of the arrays for joining later
+                #  (arrays reallocate memory when joining, so best to only
+                #   join once all the items are available)
+                X_stack = [X.reshape(-1) for X in (TX0, TX1)]
+                X_stack.append(left_X)
+                Y_stack = [Y.reshape(-1) for Y in (TY0, TY1)]
+                Y_stack.append(left_Y)
+
+                # add extra trees in the top row if required
+                #  (same number of secondary and primary grid rows)
+                if self.CX0.shape[0] == self.CX1.shape[0]:
+                    # same number of secondary and primary temp grid rows
+                    if TX0.shape[0] == TX1.shape[0]:
+                        top_X = TX0[0,1:-1]
+                        top_Y = np.repeat(TY1[-1,0], top_X.size)
+                    else:
+                        top_X = TX1[0,:-1]
+                        top_Y = np.repeat(TY0[-1,0], top_X.size)
+                    X_stack.append(top_X)
+                    Y_stack.append(top_Y)
+
+                self.TX = np.hstack(X_stack) + h_offset
+                self.TY = np.hstack(Y_stack)
 
     def optimise_perm_spacings(self):
         # generate possible perm-shade tree positions
@@ -280,13 +333,6 @@ class CocoaFarm:
         coverage = np.empty((len(samples), len(perm_poss)), dtype=bool)
         for index, p in enumerate(perm_poss): # TODO vectorise
             coverage[:, index] = ((samples - p)**2).sum(axis=1) <= d2
-
-        # try to remove each tree, but add it back in if removing it means a
-        #  tree loses its required coverage, or the average coverage becomes
-        #  too low
-        backup = coverage.copy()
-        min_count = len(perm_poss)
-        best = None
 
         def indices_options():
             ''' Create a generator of removal orderings.
@@ -312,7 +358,23 @@ class CocoaFarm:
                 rng.shuffle(indices) # in-place array shuffle
                 yield 'random', indices
 
-        pbar = tqdm(total=self.iterations * len(perm_poss))
+        with tqdm(total=self.iterations * len(perm_poss)) as pbar:
+            self._selective_perm_remove(indices_options, perm_poss, coverage,
+                                        N, pbar)
+
+    def _selective_perm_remove(self, indices_options, perm_poss, coverage, N,
+                               pbar):
+        '''
+
+        Tries to remove each perm tree, but restores it if removal causes a
+          cocoa tree to lose its required coverage, or the average coverage
+          becomes too low.
+
+        '''
+        backup = coverage.copy()
+        min_count = len(perm_poss)
+        best = None
+
         for i, (order, indices) in enumerate(indices_options(), start=1):
             pbar.set_description(f'{i}/{self.iterations} - Trying '
                                  f'{order.replace("_"," ")} indices')
@@ -350,8 +412,6 @@ class CocoaFarm:
 
             # reset for next round
             coverage = backup.copy()
-
-        pbar.close()
 
         perm_poss = perm_poss[best]
         self.PX, self.PY = perm_poss.T
@@ -416,6 +476,10 @@ class CocoaFarm:
         return np.column_stack((r * np.cos(theta), r * np.sin(theta)))
 
     def display_results(self, verbose=True):
+        with tqdm(total=14+self.debug) as pbar:
+            self._display_results(verbose, pbar)
+
+    def _display_results(self, verbose, pbar):
         dims = self.dims
 
         def circle(x, y, d, **kwargs):
@@ -423,7 +487,6 @@ class CocoaFarm:
             r = d / 2 # convert to radius
             return go.layout.Shape(x0=x-r, y0=y-r, x1=x+r, y1=y+r, **kwargs)
 
-        pbar = tqdm(total=14+self.debug)
         pbar.set_description('Initialising plot')
         fig = go.Figure()
         fig.update_layout(title=f'{dims[0]}x{dims[1]}m Cocoa Farm')
@@ -437,8 +500,8 @@ class CocoaFarm:
         shapes = []
         clear = 'rgba(0,0,0,0)'
         for tree, (X, Y) in ((self.cocoa, (self.CX, self.CY)),
-                             (self.temp_shade, (self.TX, self.TY)),
-                             (self.perm_shade, (self.PX, self.PY))):
+                             (self.temp_shade, (self.TX, self.TY))):#,
+                             #(self.perm_shade, (self.PX, self.PY))):
             pbar.set_description(f'Plotting {tree.name} Trees')
             color = ','.join(str(c) for c in tree.color)
 
@@ -504,13 +567,12 @@ class CocoaFarm:
         pbar.set_description('Displaying plot')
         fig.show()
         pbar.update()
-        pbar.close()
 
         if verbose:
-            print(f'Plotting {dims[0]}x{dims[1]}m plot')
-            print(f' -> {self.CX.size} cocoa trees')
-            print(f' -> {self.TX.size} temp shade trees')
-            print(f' -> {self.PX.size} perm shade trees')
+            print(f'Plotting {dims[0]}x{dims[1]}m plot\n'
+                  f' -> {self.CX.size} cocoa trees\n'
+                  f' -> {self.TX.size} temp shade trees\n'
+                  f' -> {self.PX.size} perm shade trees')
 
     def gen_plot_text(self):
         sep = '<br> ' # text is parsed as HTML
@@ -534,7 +596,6 @@ class CocoaFarm:
 
             text += '<br>'*2
         return text
-
 
 
 if __name__ == '__main__':
